@@ -388,16 +388,30 @@ if df is not None and not df.empty:
     st.subheader("📋 数据预览")
     st.dataframe(df.head(), use_container_width=True)
 
-    # ===== 字段映射 =====
-    st.sidebar.header("🧩 字段映射")
-    # 产品名：你说固定是 DESCRIPTION，但也开放手动映射以防表头不同
-    name_col = st.sidebar.selectbox("产品名称列", [c for c in [ "DESCRIPTION", *df.columns.tolist() ] if c in df.columns], index=0)
-    cost_col = st.sidebar.selectbox("普通成本列（COST）", [None] + list(df.columns), index=(list(df.columns).index("COST") if "COST" in df.columns else 0))
-    promo_cost_col = st.sidebar.selectbox("促销成本列（PROMOTION）", [None] + list(df.columns), index=(list(df.columns).index("PROMOTION") if "PROMOTION" in df.columns else 0))
-    promo_price_col = st.sidebar.selectbox("促销售价列（PROMO SELLING PRICE）", [None] + list(df.columns), index=(list(df.columns).index("PROMO SELLING PRICE") if "PROMO SELLING PRICE" in df.columns else 0))
-    # 普通卖价列可多选（如 Price1/Price2）
-    guess_price_cols = [c for c in df.columns if re.search(r"price", str(c), re.I)]
-    price_cols = st.sidebar.multiselect("普通卖价列（可多选，支持'199/299'）", guess_price_cols or list(df.columns), default=guess_price_cols[:2] if guess_price_cols else [])
+    # ===== 字段映射（根据你Excel固定模板） =====
+orig_cols = list(df.columns)
+
+# 默认映射规则（确保有 fallback）
+default_name_col = "DESCRIPTION" if "DESCRIPTION" in orig_cols else orig_cols[0]
+default_cost_col = "COST" if "COST" in orig_cols else None
+default_promo_cost_col = "PROMOTION" if "PROMOTION" in orig_cols else None
+
+# 卖价列完全手动选择（不给默认值）
+price_candidates = []
+
+
+# 在侧边栏显示（可手动调整）
+st.sidebar.header("🧩 字段映射")
+name_col = st.sidebar.selectbox("产品名称列", orig_cols, index=orig_cols.index(default_name_col))
+cost_col = st.sidebar.selectbox("普通成本列（Cost）", [None] + orig_cols,
+                                index=(orig_cols.index(default_cost_col) + 1 if default_cost_col else 0))
+promo_cost_col = st.sidebar.selectbox("促销成本列（Promotion，可选）", [None] + orig_cols,
+                                      index=(orig_cols.index(default_promo_cost_col) + 1 if default_promo_cost_col else 0))
+promo_price_col = st.sidebar.selectbox("促销售价列（Promo Selling Price，可选）", [None] + orig_cols)
+
+price_cols = st.sidebar.multiselect("普通卖价列（可多选，支持 199/299 用 '/' 分隔）",
+                                    orig_cols, default=price_candidates)
+
 
     # ===== 平台抽成（来自配置 + 可手调） =====
     st.sidebar.header("🏷️ 平台抽成设置")
