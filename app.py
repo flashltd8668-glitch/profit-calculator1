@@ -524,15 +524,7 @@ else:
             # 用 Styler 上色（Streamlit 会渲染 pandas Styler）
             sty = style_results(display_df)
             st.write(sty, unsafe_allow_html=True)
-
-            # 表格下方增加颜色说明
-st.markdown(
-    """
-    🟥 **红色背景** = 亏损产品  
-    🟩 **绿色背景** = 促销产品
-    """
-)
-
+            st.markdown("**颜色说明：** 🟥 亏损 / 🟩 Promotion / 🟨 高利润")
 
             # 可视化利润对比
             st.subheader("📈 产品利润对比（MYR）")
