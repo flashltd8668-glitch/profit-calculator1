@@ -557,7 +557,6 @@ st.markdown(
                     .properties(height=400)
                 )
                 st.altair_chart(chart, use_container_width=True)
-                
             except Exception:
                 st.bar_chart(display_df.set_index("产品名称")["利润 (MYR)"])
 
