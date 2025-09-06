@@ -186,10 +186,6 @@ def style_results(df_results):
         return [""] * len(row)
 
     sty = df_results.style.apply(lambda r: row_style(r), axis=1)
-    # format money
-    if "利润 (MYR)" in df_results.columns:
-        sty = sty.format({"利润 (MYR)": "RM {0:,.2f}", "个人抽成 (MYR)": "RM {0:,.2f}"}, na_rep="-")
-    return sty
 
 # ✅ 动态格式化函数：整数不加小数点，小数保留 2 位
     def smart_format(x, prefix="", suffix=""):
@@ -202,6 +198,11 @@ def style_results(df_results):
                 return f"{prefix}{x:,.2f}{suffix}"
         except Exception:
             return x
+    
+    # format money
+    if "利润 (MYR)" in df_results.columns:
+        sty = sty.format({"利润 (MYR)": "RM {0:,.2f}", "个人抽成 (MYR)": "RM {0:,.2f}"}, na_rep="-")
+    return sty
 
     # 构建格式化规则
     format_dict = {}
