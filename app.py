@@ -193,18 +193,27 @@ if df is not None and not df.empty:
         result_df = pd.DataFrame(records)
         result_df = result_df.sort_values(by="利润 (MYR)", ascending=False).reset_index(drop=True)
 
-        # ========== 筛选产品 ==========
-        st.sidebar.header("产品筛选")
-        all_products = sorted(result_df["产品名称"].dropna().unique().tolist())
-        search_term = st.sidebar.text_input("🔍 搜索产品（支持模糊匹配）")
+       # ========== 筛选产品 ==========
+st.sidebar.header("产品筛选")
 
-        if search_term:
-            filtered_products = [p for p in all_products if search_term.lower() in str(p).lower()]
-        else:
-            filtered_products = all_products
+# 统一转成字符串，避免 int + str 混合排序时报错
+all_products = sorted(result_df["产品名称"].dropna().astype(str).unique().tolist())
 
-        selected_products = st.sidebar.multiselect("选择要显示的产品", filtered_products, default=filtered_products)
-        filtered_df = result_df[result_df["产品名称"].isin(selected_products)]
+search_term = st.sidebar.text_input("🔍 搜索产品（支持模糊匹配）")
+
+if search_term:
+    filtered_products = [p for p in all_products if search_term.lower() in str(p).lower()]
+else:
+    filtered_products = all_products
+
+selected_products = st.sidebar.multiselect(
+    "选择要显示的产品",
+    filtered_products,
+    default=filtered_products
+)
+
+filtered_df = result_df[result_df["产品名称"].astype(str).isin(selected_products)]
+
 
         # ========== 表格展示 ==========
         st.subheader("📊 计算结果（已按利润高低排序）")
