@@ -519,26 +519,11 @@ else:
             filtered_df = result_df[result_df["产品名称"].isin(selected_products)]
 
             # 显示并样式化（高亮）
-st.subheader("📊 计算结果（按利润排序）")
-display_df = filtered_df.copy()
-# 用 Styler 上色（Streamlit 会渲染 pandas Styler）
-sty = style_results(display_df)
-st.write(sty, unsafe_allow_html=True)
-
-# 🔍 在表格下方增加颜色图例
-st.markdown(
-    """
-    <div style="margin-top:10px;">
-        <span style="display:inline-block;width:18px;height:18px;background-color:#ffd6d6;border:1px solid #999;margin-right:6px;"></span>
-        亏损产品
-        &nbsp;&nbsp;&nbsp;&nbsp;
-        <span style="display:inline-block;width:18px;height:18px;background-color:#e6ffe6;border:1px solid #999;margin-right:6px;"></span>
-        促销产品
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
+            st.subheader("📊 计算结果（按利润排序）")
+            display_df = filtered_df.copy()
+            # 用 Styler 上色（Streamlit 会渲染 pandas Styler）
+            sty = style_results(display_df)
+            st.write(sty, unsafe_allow_html=True)
 
             # 可视化利润对比
             st.subheader("📈 产品利润对比（MYR）")
