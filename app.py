@@ -1,247 +1,229 @@
+# app.py
+# -*- coding: utf-8 -*-
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import io
-import shutil
+import os, io, json, shutil, re
 from datetime import datetime
 from pathlib import Path
 
-st.set_page_config(page_title="Profit Calculator (Multi-Country + Auto Promo)", layout="wide")
-st.title("💰 多国家利润计算器 (自动促销优先 + 文件管理 + 汇率支持)")
+# ============== 页面基本设置 ==============
+st.set_page_config(page_title="Profit Calculator — Multi-Country", layout="wide")
+st.title("💰 多国家利润计算器（合并表头清理 + 历史费率管理 + 可视化）")
 
-# 文件存放目录 & metadata
-UPLOAD_DIR = "uploads"
-META_FILE = "file_metadata.csv"
+# ============== 文件与配置路径 ==============
+BASE_DIR = Path(".")
+UPLOAD_DIR = BASE_DIR / "uploads"
+META_FILE = BASE_DIR / "file_metadata.csv"
+CONFIG_FILE = BASE_DIR / "platform_fees.csv"
+CONFIG_HISTORY_DIR = BASE_DIR / "config_history"
+RATES_FILE = BASE_DIR / "exchange_rates.json"
 
-# 初始化 metadata
-if not os.path.exists(META_FILE):
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+if not META_FILE.exists():
     pd.DataFrame(columns=["country", "filename", "filepath", "upload_date"]).to_csv(META_FILE, index=False)
 
-# 国家和对应货币
+# ============== 国家与汇率默认 ==============
 COUNTRY_CURRENCY = {
     "Thailand": "THB",
     "Malaysia": "MYR",
     "Vietnam": "VND",
     "Philippines": "PHP",
-    "Indonesia": "IDR"
+    "Indonesia": "IDR",
 }
+DEFAULT_RATES = {"THB": 7.8, "MYR": 1.0, "VND": 5400.0, "PHP": 12.0, "IDR": 3400.0}
 
-# === 国家选择 ===
-st.sidebar.header("国家选择")
+# ============== 平台费率配置初始化 ==============
+def ensure_config_file():
+    if not CONFIG_FILE.exists():
+        demo = pd.DataFrame([
+            ["Thailand","Shopee","基础佣金",9,"示例"],
+            ["Thailand","Lazada","Full（FS+LazCoin）",13,"示例"],
+            ["Malaysia","Shopee","基础佣金",8,"示例"],
+        ], columns=["country","platform","scenario","fee_pct","remark"])
+        demo.to_csv(CONFIG_FILE, index=False)
+ensure_config_file()
+
+def load_fee_config():
+    try:
+        return pd.read_csv(CONFIG_FILE)
+    except Exception:
+        return pd.DataFrame(columns=["country","platform","scenario","fee_pct","remark"])
+
+def save_fee_config(df: pd.DataFrame, keep_history=True):
+    df.to_csv(CONFIG_FILE, index=False)
+    if keep_history:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        shutil.copy(CONFIG_FILE, CONFIG_HISTORY_DIR / f"platform_fees_{ts}.csv")
+
+fee_df_global = load_fee_config()
+
+# ============== 辅助函数 ==============
+def clean_column_names_from_multiindex(cols):
+    new_cols = []
+    for col in cols:
+        if isinstance(col, tuple) or isinstance(col, list):
+            parts = [str(x).strip() for x in col if x is not None and "Unnamed" not in str(x)]
+            joined = " ".join([p for p in parts if p and p.lower() != 'nan']).strip()
+            new_cols.append(joined if joined else None)
+        else:
+            c = str(col)
+            new_cols.append(c if c and "Unnamed" not in c and c.lower() != 'nan' else None)
+    ser = pd.Series(new_cols)
+    ser = ser.fillna(method="ffill").fillna(method="bfill")
+    return ser.tolist()
+
+def try_read_and_clean(path, header_idx):
+    p = Path(path)
+    if p.suffix.lower() in [".xlsx", ".xls"]:
+        try:
+            df_try = pd.read_excel(path, header=header_idx)
+        except:
+            df_try = pd.read_excel(path, header=None)
+            df_try.columns = [f"Column_{i}" for i in range(len(df_try.columns))]
+            return df_try
+    else:
+        try:
+            df_try = pd.read_csv(path, header=header_idx)
+        except:
+            df_try = pd.read_csv(path, header=None)
+            df_try.columns = [f"Column_{i}" for i in range(len(df_try.columns))]
+            return df_try
+    # 兜底清理 Unnamed
+    df_try.columns = [str(c).strip() for c in df_try.columns]
+    df_try = df_try.loc[:, ~df_try.columns.str.contains("^Unnamed", case=False)]
+    return df_try
+
+def split_price_cell(v):
+    if pd.isna(v): return []
+    s = str(v)
+    s = re.sub(r"[\/\|;，\s]+", ",", s)
+    parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+    out = []
+    for p in parts:
+        try: out.append(float(p))
+        except: continue
+    return out
+
+def style_results(df_results, high_profit_threshold):
+    def row_style(row):
+        if pd.isna(row["利润 (MYR)"]):
+            return [""] * len(row)
+        if row["利润 (MYR)"] < 0:
+            return ["background-color:#ffd6d6"] * len(row)  # 红
+        if row["利润 (MYR)"] >= high_profit_threshold:
+            return ["background-color:#fff7cc"] * len(row)  # 黄
+        if row.get("来源", "") == "Promotion":
+            return ["background-color:#e6ffe6"] * len(row)  # 绿
+        return [""] * len(row)
+
+    sty = df_results.style.apply(lambda r: row_style(r), axis=1)
+    sty = sty.format(precision=2, na_rep="-")
+    return sty
+
+# ============== 侧边栏：国家选择 & 上传 ==============
+st.sidebar.header("🌍 国家选择")
 countries = list(COUNTRY_CURRENCY.keys())
 country = st.sidebar.selectbox("选择国家", countries)
 
-# === 上传文件 ===
-uploaded_file = st.file_uploader(f"上传 {country} 的 Excel/CSV 文件", type=["xlsx", "xls", "csv"])
+st.sidebar.header("📤 上传价钱表")
+uploaded_file = st.sidebar.file_uploader(f"上传 {country} 的 Excel/CSV", type=["xlsx","xls","csv"])
 if uploaded_file:
-    save_dir = os.path.join(UPLOAD_DIR, country)
-    os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, uploaded_file.name)
+    save_dir = UPLOAD_DIR / country
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / uploaded_file.name
+    with open(save_path, "wb") as f: f.write(uploaded_file.getbuffer())
 
-    # 保存文件（覆盖旧文件）
-    with open(save_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    # 更新 metadata（避免重复）
     meta_df = pd.read_csv(META_FILE)
     meta_df = meta_df[~((meta_df["country"] == country) & (meta_df["filename"] == uploaded_file.name))]
     new_record = pd.DataFrame([{
-        "country": country,
-        "filename": uploaded_file.name,
-        "filepath": save_path,
-        "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M")
+        "country": country,"filename": uploaded_file.name,
+        "filepath": str(save_path),"upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }])
-    meta_df = pd.concat([meta_df, new_record], ignore_index=True)
+    meta_df = pd.concat([meta_df,new_record], ignore_index=True)
     meta_df.to_csv(META_FILE, index=False)
+    st.sidebar.success("✅ 文件已保存")
 
-    st.success(f"✅ 文件已保存到 {save_path}")
+meta_df = pd.read_csv(META_FILE)
+country_files = meta_df[meta_df["country"] == country].sort_values("upload_date", ascending=False)
 
-# === 历史文件选择 ===
-df = None
-try:
-    meta_df = pd.read_csv(META_FILE)
-    country_files = meta_df[meta_df["country"] == country]
+selected_file = None
+if not country_files.empty:
+    st.sidebar.header("📁 已上传文件")
+    selected_file = st.sidebar.selectbox("选择文件", country_files["filename"].tolist())
 
-    if not country_files.empty:
-        st.sidebar.subheader(f"{country} 已上传的文件")
-        file_choice = st.sidebar.selectbox(
-            "选择文件",
-            country_files.sort_values("upload_date", ascending=False)["filename"].tolist()
-        )
+# ============== 侧边栏：表头 & 汇率 & 阈值 ==============
+st.sidebar.header("📑 表头设置")
+header_row = st.sidebar.number_input("表头所在行（从1开始）", min_value=1, max_value=10, value=2)
 
-        if file_choice:
-            file_info = country_files[country_files["filename"] == file_choice].iloc[0]
-            st.info(f"📂 选择文件: {file_info['filename']} (上传日期: {file_info['upload_date']})")
+st.sidebar.header("💱 汇率设置")
+rates = json.loads(RATES_FILE.read_text()) if RATES_FILE.exists() else DEFAULT_RATES
+for cur in COUNTRY_CURRENCY.values():
+    rates[cur] = st.sidebar.number_input(f"1 {cur} = ? MYR", value=float(rates.get(cur, DEFAULT_RATES[cur])), step=0.01)
+if st.sidebar.button("💾 保存汇率"):
+    RATES_FILE.write_text(json.dumps(rates, ensure_ascii=False, indent=2))
+    st.sidebar.success("✅ 汇率已保存")
 
-            # 删除文件
-            if st.sidebar.button(f"🗑️ 删除 {file_choice}"):
-                try:
-                    if os.path.exists(file_info["filepath"]):
-                        os.remove(file_info["filepath"])
-                    meta_df = meta_df.drop(
-                        meta_df[(meta_df["country"] == country) & (meta_df["filename"] == file_choice)].index
-                    )
-                    meta_df.to_csv(META_FILE, index=False)
-                    st.sidebar.success(f"✅ 已删除文件 {file_choice}")
-                    st.stop()
-                except Exception as e:
-                    st.sidebar.error(f"❌ 删除失败: {e}")
+st.sidebar.header("🎯 高利润阈值设置")
+high_profit_threshold = st.sidebar.number_input("高利润阈值 (MYR)", value=50.0, step=1.0)
 
-            # 读取文件
-            if file_info["filename"].endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_info["filepath"], header=1)
-            else:
-                df = pd.read_csv(file_info["filepath"])
-except Exception:
-    # fallback: 自动从 uploads 取最新文件
-    files = list(Path(os.path.join(UPLOAD_DIR, country)).glob("*"))
-    if files:
-        latest_file = max(files, key=lambda f: f.stat().st_mtime)
-        df = pd.read_excel(latest_file) if latest_file.suffix in [".xlsx", ".xls"] else pd.read_csv(latest_file)
-    else:
-        st.warning("⚠️ 未找到上传文件，请先上传。")
-        st.stop()
+# ============== 平台费率对比 ==============
+st.subheader("🌍 各国家平台费率对比（可筛选）")
+fee_df = load_fee_config()
+if not fee_df.empty:
+    sum_df = (
+        fee_df.groupby(["country","platform"])
+        .agg(最低费率=("fee_pct","min"),
+             最高费率=("fee_pct","max"),
+             平均费率=("fee_pct","mean"),
+             方案数量=("fee_pct","count"))
+        .reset_index()
+    )
+    sum_df = sum_df.round(2)
+    st.dataframe(sum_df, use_container_width=True)
 
-# 删除所有文件
-st.sidebar.header("⚙️ 文件管理")
-if st.sidebar.button("🗑️ 删除所有已上传文件"):
-    if os.path.exists(UPLOAD_DIR):
-        shutil.rmtree(UPLOAD_DIR)
-        os.makedirs(UPLOAD_DIR, exist_ok=True)
-    pd.DataFrame(columns=["country", "filename", "filepath", "upload_date"]).to_csv(META_FILE, index=False)
-    st.sidebar.success("✅ 已删除所有上传文件和记录")
-    st.stop()
-
-# === 汇率设置 ===
-st.sidebar.header("🌍 汇率设置 (换算成 MYR)")
-exchange_rates = {}
-for c, cur in COUNTRY_CURRENCY.items():
-    default_rate = 7.8 if cur == "THB" else 1.0
-    rate = st.sidebar.number_input(f"1 {cur} = ? MYR", value=default_rate, step=0.01, format="%.2f")
-    exchange_rates[cur] = rate
-
-# === 利润计算逻辑 ===
-if df is not None:
+# ============== 读取文件并计算利润 ==============
+if selected_file:
+    fpath = country_files[country_files["filename"] == selected_file].iloc[0]["filepath"]
+    df = try_read_and_clean(fpath, header_row-1)
     st.subheader("📋 数据预览")
-    st.dataframe(df.head())
+    st.dataframe(df.head(), use_container_width=True)
 
-    # === 映射字段 ===
-    st.sidebar.header("映射字段")
-    name_col = st.sidebar.selectbox("选择产品名称列", [None] + list(df.columns))
-    cost_col = st.sidebar.selectbox("选择普通成本列", [None] + list(df.columns))
-    promo_cost_col = st.sidebar.selectbox("选择促销成本列 (可选)", [None] + list(df.columns))
-    promo_price_col = st.sidebar.selectbox("选择促销售价列 (可选)", [None] + list(df.columns))
-    price_cols = st.sidebar.multiselect("选择普通卖价列（可多选）", list(df.columns))
+    # 映射
+    st.sidebar.header("🧩 字段映射")
+    name_col = st.sidebar.selectbox("产品名称列", list(df.columns))
+    cost_col = st.sidebar.selectbox("成本列", list(df.columns))
+    price_cols = st.sidebar.multiselect("卖价列", list(df.columns))
 
-    # === 设置 ===
-    st.sidebar.header("计算设置")
-    platform_fee_pct = st.sidebar.number_input("平台抽成 (%)", value=5.0, step=0.1, format="%.2f")
-    personal_commission_pct = st.sidebar.number_input("个人抽成 (%)", value=0.0, step=0.1, format="%.2f")
-    high_profit_threshold = st.sidebar.number_input("高利润阈值 (MYR)", value=50.0, step=1.0, format="%.2f")
+    # 平台费率
+    st.sidebar.header("🏷️ 抽成设置")
+    platform_fee_pct = st.sidebar.number_input("平台费率（%）", value=5.0, step=0.1)
+    personal_commission_pct = st.sidebar.number_input("个人抽成（%）", value=0.0, step=0.1)
 
-    if name_col and cost_col and price_cols:
-        records = []
-        local_currency = COUNTRY_CURRENCY[country]
-        conversion_rate = exchange_rates[local_currency]
-
-        for _, row in df.iterrows():
-            product = row[name_col]
-
-            # 优先使用促销
-            if promo_cost_col and promo_price_col and pd.notna(row[promo_cost_col]) and pd.notna(row[promo_price_col]):
-                base_cost = pd.to_numeric(row[promo_cost_col], errors="coerce") or 0
-                prices = str(row[promo_price_col]).split("/")
-                source = "Promotion"
-            else:
-                base_cost = pd.to_numeric(row[cost_col], errors="coerce") or 0
-                prices = []
-                for col in price_cols:
-                    prices.extend(str(row[col]).split("/"))
-                source = "Normal"
-
-            for raw_p in prices:
-                try:
-                    price = float(raw_p)
-                except:
-                    continue
-
-                platform_fee = price * (platform_fee_pct / 100.0)
-                profit = price - base_cost - platform_fee
-                margin = (profit / price) * 100 if price > 0 else np.nan
-                commission = profit * (personal_commission_pct / 100.0)
-
-                # 换算成 MYR
-                profit_myr = profit / conversion_rate
-                commission_myr = commission / conversion_rate
-
+    # 计算
+    records = []
+    conv = float(rates[COUNTRY_CURRENCY[country]])
+    for _, row in df.iterrows():
+        product = str(row.get(name_col, "")).strip()
+        cost = pd.to_numeric(row.get(cost_col), errors="coerce")
+        if pd.isna(cost): continue
+        for col in price_cols:
+            for price in split_price_cell(row.get(col)):
+                fee = price * (platform_fee_pct/100)
+                profit_local = price - cost - fee
+                profit_myr = profit_local / conv
                 records.append({
                     "产品名称": product,
-                    f"成本 ({local_currency})": base_cost,
-                    f"卖价 ({local_currency})": price,
-                    f"平台抽成 ({local_currency})": round(platform_fee, 2),
-                    "利润 (MYR)": round(profit_myr, 2),
-                    "利润率 %": round(margin, 2),
-                    "个人抽成 (MYR)": round(commission_myr, 2),
-                    "来源": source
+                    "利润 (MYR)": round(profit_myr,2),
+                    "利润率 %": round((profit_local/price*100) if price>0 else 0,2),
                 })
+    result_df = pd.DataFrame(records)
 
-        result_df = pd.DataFrame(records)
-        result_df = result_df.sort_values(by="利润 (MYR)", ascending=False).reset_index(drop=True)
+    st.subheader("📊 计算结果")
+    sty = style_results(result_df, high_profit_threshold)
+    st.write(sty, unsafe_allow_html=True)
 
-        # ========== 筛选产品 ==========
-        st.sidebar.header("产品筛选")
-        all_products = sorted(map(str, result_df["产品名称"].dropna().unique().tolist()))
-        search_term = st.sidebar.text_input("🔍 搜索产品（支持模糊匹配）")
+    st.markdown("**颜色说明：** 🟥 亏损 / 🟩 Promotion / 🟨 高利润")
 
-        if search_term:
-            filtered_products = [p for p in all_products if search_term.lower() in str(p).lower()]
-        else:
-            filtered_products = all_products
-
-        selected_products = st.sidebar.multiselect(
-            "选择要显示的产品",
-            filtered_products,
-            default=filtered_products
-        )
-
-        filtered_df = result_df[result_df["产品名称"].isin(selected_products)]
-
-        # ========== 表格展示 ==========
-        st.subheader("📊 计算结果（已按利润高低排序）")
-
-        def highlight_profit(row):
-            if row["利润 (MYR)"] < 0:
-                return ["background-color: red"] * len(row)
-            elif row["利润 (MYR)"] >= high_profit_threshold:
-                return ["background-color: lightgreen"] * len(row)
-            else:
-                return ["background-color: yellow"] * len(row)
-
-        if filtered_df.empty:
-            st.warning("⚠️ 没有符合条件的产品数据")
-        else:
-            sty = filtered_df.style.apply(highlight_profit, axis=1).format(precision=2)
-            st.dataframe(sty)
-            st.markdown("🟩 高利润 | 🟨 低利润 | 🟥 亏损")
-
-            # ========== 图表 ==========
-            st.subheader("📈 利润对比图 (MYR)")
-            chart_grouped = filtered_df.groupby(["产品名称", "来源", f"卖价 ({local_currency})"])["利润 (MYR)"].sum().reset_index()
-            st.bar_chart(chart_grouped.set_index("产品名称").pivot(columns=f"卖价 ({local_currency})", values="利润 (MYR)"))
-
-            # ========== 导出 ==========
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-                result_df.to_excel(writer, index=False, sheet_name="All_Results")
-                filtered_df.to_excel(writer, index=False, sheet_name="Filtered_Results")
-                chart_grouped.to_excel(writer, index=False, sheet_name="ChartData")
-
-            st.download_button(
-                label="⬇️ 下载结果 Excel",
-                data=buffer.getvalue(),
-                file_name=f"profit_results_{country}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-    else:
-        st.warning("⚠️ 请至少选择 产品名 / 成本 / 卖价 列")
