@@ -527,7 +527,7 @@ else:
             st.markdown(
     """
     **颜色说明：**
-    <span style="display:inline-block;width:18px;height:18px;background-color:#e6ffe6;border:1px solid #999;margin-right:6px;"></span> Promotion
+    <span style="display:inline-block;width:18px;height:18px;background-color:#e6ffe6;border:1px solid #999;margin-right:6px;"></span> Clearance Price Product
     """,
     unsafe_allow_html=True
 )
