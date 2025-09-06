@@ -12,11 +12,13 @@ uploaded_file = st.file_uploader("上传 Excel/CSV 文件", type=["xlsx", "xls",
 if uploaded_file:
     try:
         if uploaded_file.name.endswith((".xlsx", ".xls")):
-            df = pd.read_excel(uploaded_file)
+            # 跳过第一行（合并表头），第二行才是真正的字段名
+            df = pd.read_excel(uploaded_file, header=1)
         else:
             df = pd.read_csv(uploaded_file)
     except Exception:
         df = pd.read_csv(uploaded_file, encoding_errors="ignore")
+
 
     st.subheader("预览数据")
     st.dataframe(df.head())
