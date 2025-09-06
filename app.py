@@ -191,6 +191,32 @@ def style_results(df_results):
         sty = sty.format({"利润 (MYR)": "RM {0:,.2f}", "个人抽成 (MYR)": "RM {0:,.2f}"}, na_rep="-")
     return sty
 
+# ✅ 动态格式化函数：整数不加小数点，小数保留 2 位
+    def smart_format(x, prefix="", suffix=""):
+        try:
+            if pd.isna(x):
+                return "-"
+            if float(x).is_integer():
+                return f"{prefix}{int(x):,}{suffix}"
+            else:
+                return f"{prefix}{x:,.2f}{suffix}"
+        except Exception:
+            return x
+
+    # 构建格式化规则
+    format_dict = {}
+    for col in df_results.columns:
+        if "利润 (MYR)" in col:
+            format_dict[col] = lambda x, p="RM ": smart_format(x, prefix=p)
+        elif "抽成" in col or "成本" in col or "卖价" in col:
+            format_dict[col] = lambda x: smart_format(x)
+        elif "%" in col:  # 利润率百分比
+            format_dict[col] = lambda x: smart_format(x, suffix="%")
+
+    sty = sty.format(format_dict, na_rep="-")
+    return sty
+
+
 # ============== 侧边栏：国家选择 & 文件上传 ==============
 st.sidebar.header("🌍 国家选择")
 countries = list(COUNTRY_CURRENCY.keys())
