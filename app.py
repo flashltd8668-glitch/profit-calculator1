@@ -224,10 +224,13 @@ if uploaded_file:
                         color=color_scale,
                         tooltip=list(chart_data.columns)
                     )
-                    .properties(height=400, title="红 = 亏损, 绿 = 促销, 蓝 = 正常")
+                    .properties(height=400)
                 )
 
                 st.altair_chart(chart, use_container_width=True)
+
+                # 颜色含义说明
+                st.markdown("🔴 亏损 | 🟢 促销 | 🔵 正常")
             except Exception:
                 st.bar_chart(display_df.set_index("产品名称")["利润 (MYR)"])
 
