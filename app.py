@@ -33,7 +33,6 @@ COUNTRY_CURRENCY = {
     "Philippines": "PHP",
     "Indonesia": "IDR",
 }
-
 DEFAULT_RATES = {"THB": 7.8, "MYR": 1.0, "VND": 5400.0, "PHP": 12.0, "IDR": 3400.0}
 
 # ============== 平台费率配置初始化（示例文件） ==============
@@ -45,7 +44,6 @@ def ensure_config_file():
             ["Malaysia","Shopee","基础佣金",8,"示例"],
         ], columns=["country","platform","scenario","fee_pct","remark"])
         demo.to_csv(CONFIG_FILE, index=False)
-
 ensure_config_file()
 
 def load_fee_config():
@@ -81,7 +79,6 @@ def clean_column_names_from_multiindex(cols):
 
 def try_read_and_clean(path, header_idx):
     p = Path(path)
-    df = None
     if p.suffix.lower() in [".xlsx", ".xls"]:
         try:
             df_try = pd.read_excel(path, header=header_idx)
@@ -98,16 +95,10 @@ def try_read_and_clean(path, header_idx):
                 df_try.columns = clean_cols
                 return df_try
             else:
-                try:
-                    df2 = pd.read_excel(path, header=[0, header_idx])
-                    new_cols = clean_column_names_from_multiindex(df2.columns.values)
-                    df2.columns = new_cols
-                    return df2
-                except Exception:
-                    cols = [c if not str(c).startswith("Unnamed") else None for c in df_try.columns]
-                    cols = pd.Series(cols).fillna(method="ffill").fillna(method="bfill")
-                    df_try.columns = cols
-                    return df_try
+                df2 = pd.read_excel(path, header=[0, header_idx])
+                new_cols = clean_column_names_from_multiindex(df2.columns.values)
+                df2.columns = new_cols
+                return df2
         except Exception:
             df = pd.read_excel(path, header=None)
             df.columns = [f"Column_{i}" for i in range(len(df.columns))]
@@ -159,178 +150,129 @@ def style_results(df_results):
         if row.get("来源", "") == "Promotion":
             return ["background-color:#e6ffe6"] * len(row)
         return [""] * len(row)
-
     sty = df_results.style.apply(lambda r: row_style(r), axis=1)
     if "利润 (MYR)" in df_results.columns:
         sty = sty.format({"利润 (MYR)": "RM {0:,.2f}", "个人抽成 (MYR)": "RM {0:,.2f}"}, na_rep="-")
     return sty
 
 # ============== 侧边栏：国家选择 & 文件上传 ==============
-st.sidebar.header("⚙️ 设置")
+st.sidebar.header("🌍 国家选择")
+countries = list(COUNTRY_CURRENCY.keys())
+country = st.sidebar.selectbox("选择国家", countries)
+st.sidebar.header("📤 上传价钱表")
+uploaded_file = st.sidebar.file_uploader(f"上传 {country} 的 Excel/CSV", type=["xlsx","xls","csv"])
 
-country = st.sidebar.selectbox("选择国家", list(COUNTRY_CURRENCY.keys()))
-currency = COUNTRY_CURRENCY[country]
-
-uploaded_file = st.sidebar.file_uploader("上传 Excel/CSV 文件", type=["xlsx", "xls", "csv"])
-
-if uploaded_file is not None:
-    # 保存上传的文件
-    save_path = UPLOAD_DIR / uploaded_file.name
+if uploaded_file:
+    save_dir = UPLOAD_DIR / country
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / uploaded_file.name
     with open(save_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-
-    # 更新元数据
-    meta = pd.read_csv(META_FILE)
-    new_row = {
+    meta_df = pd.read_csv(META_FILE)
+    new_record = pd.DataFrame([{
         "country": country,
         "filename": uploaded_file.name,
         "filepath": str(save_path),
-        "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    meta = pd.concat([meta, pd.DataFrame([new_row])], ignore_index=True)
-    meta.to_csv(META_FILE, index=False)
+        "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }])
+    meta_df = pd.concat([meta_df, new_record], ignore_index=True)
+    meta_df.to_csv(META_FILE, index=False)
+    st.sidebar.success("✅ 文件已保存")
 
-    st.sidebar.success(f"文件已保存: {uploaded_file.name}")
-
-# 历史文件列表
-st.sidebar.subheader("📂 历史文件")
-meta = pd.read_csv(META_FILE)
-meta_country = meta[meta["country"] == country]
-if not meta_country.empty:
-    selected_file = st.sidebar.selectbox("选择已上传文件", meta_country["filename"].tolist()[::-1])
-    if selected_file:
-        file_record = meta_country[meta_country["filename"] == selected_file].iloc[0]
-        file_path = file_record["filepath"]
-
-        st.write(f"已选择文件: **{selected_file}** （上传于 {file_record['upload_date']}）")
-
-        # 尝试读取
-        try:
-            df_preview = try_read_and_clean(file_path, header_idx=0)
-            st.write("数据预览：", df_preview.head())
-        except Exception as e:
-            st.error(f"文件读取失败: {e}")
+meta_df = pd.read_csv(META_FILE)
+country_files = meta_df[meta_df["country"] == country].sort_values("upload_date", ascending=False)
+selected_file = None
+if not country_files.empty:
+    st.sidebar.header("📁 已上传文件")
+    selected_file = st.sidebar.selectbox("选择文件", country_files["filename"].tolist())
 
 # ============== 汇率设置 ==============
-st.sidebar.subheader("💱 汇率设置")
-rates = DEFAULT_RATES.copy()
+st.sidebar.header("💱 汇率设置")
+rates = {}
 if RATES_FILE.exists():
     try:
-        with open(RATES_FILE, "r", encoding="utf-8") as f:
-            rates.update(json.load(f))
-    except Exception:
-        pass
-
+        rates = json.loads(RATES_FILE.read_text(encoding="utf-8"))
+    except:
+        rates = DEFAULT_RATES.copy()
+else:
+    rates = DEFAULT_RATES.copy()
 for cur in COUNTRY_CURRENCY.values():
-    rates[cur] = st.sidebar.number_input(
-        f"1 {cur} = ? MYR", value=float(rates.get(cur, 1.0)), step=0.01
-    )
+    rates[cur] = st.sidebar.number_input(f"1 {cur} = ? MYR", value=float(rates.get(cur, DEFAULT_RATES.get(cur, 1.0))), step=0.01)
+if st.sidebar.button("💾 保存汇率"):
+    RATES_FILE.write_text(json.dumps(rates, ensure_ascii=False, indent=2), encoding="utf-8")
+    st.sidebar.success("✅ 汇率已保存")
 
-if st.sidebar.button("保存汇率"):
-    with open(RATES_FILE, "w", encoding="utf-8") as f:
-        json.dump(rates, f, ensure_ascii=False, indent=2)
-    st.sidebar.success("汇率已保存 ✅")
-
-# ============== 利润计算逻辑 ==============
-if uploaded_file or ("selected_file" in locals() and selected_file):
-    if uploaded_file:
-        file_path = save_path
-    else:
-        file_record = meta_country[meta_country["filename"] == selected_file].iloc[0]
-        file_path = file_record["filepath"]
-
+# ============== 读取文件并计算利润 ==============
+df = None
+if selected_file:
+    sel_info = country_files[country_files["filename"] == selected_file].iloc[0]
+    fpath = sel_info["filepath"]
     try:
-        df = try_read_and_clean(file_path, header_idx=0)
+        df = try_read_and_clean(fpath, 0)
     except Exception as e:
-        st.error(f"读取失败: {e}")
+        st.error(f"读取文件失败：{e}")
         df = None
 
-    if df is not None:
-        st.subheader("📊 字段映射")
-        st.write("清理后列名：", list(df.columns))
+if df is not None:
+    st.subheader("📋 数据预览")
+    st.dataframe(df.head(), use_container_width=True)
 
-        name_col = st.selectbox("产品名称列", df.columns)
-        cost_col = st.selectbox("成本列", df.columns)
-        price_col = st.selectbox("卖价列", df.columns)
+    name_col = st.selectbox("选择产品名列", df.columns)
+    cost_col = st.selectbox("选择成本列", df.columns)
+    price_cols = st.multiselect("选择卖价列", df.columns)
 
-        platform_fee_pct = st.number_input("平台费率 (%)", value=10.0, step=0.1)
-        personal_pct = st.number_input("个人抽成 (%)", value=0.0, step=0.1)
+    if name_col and cost_col and price_cols:
+        records = []
+        conv = float(rates[COUNTRY_CURRENCY[country]])
+        for _, row in df.iterrows():
+            product = str(row.get(name_col, ""))
+            cost = float(pd.to_numeric(row.get(cost_col), errors="coerce") or 0)
+            for col in price_cols:
+                prices = split_price_cell(row.get(col))
+                for price in prices:
+                    platform_fee_local = price * 0.1
+                    profit_local = price - cost - platform_fee_local
+                    profit_myr = profit_local / conv
+                    records.append({
+                        "产品名称": product,
+                        "利润 (MYR)": profit_myr,
+                        "来源": "Normal"
+                    })
+        result_df = pd.DataFrame(records)
+        st.subheader("📊 计算结果")
+        st.write(style_results(result_df), unsafe_allow_html=True)
 
-        if st.button("开始计算"):
-            records = []
-            conv = float(rates[currency]) if rates[currency] > 0 else 1.0
-
-            for _, row in df.iterrows():
-                try:
-                    product = str(row[name_col])
-                    cost = float(row[cost_col])
-                    price = float(row[price_col])
-                except Exception:
-                    continue
-
-                platform_fee = price * platform_fee_pct / 100.0
-                profit_local = price - cost - platform_fee
-                profit_myr = profit_local / conv
-                margin_pct = profit_local / price * 100 if price > 0 else np.nan
-                personal_comm = profit_local * personal_pct / 100.0 / conv
-
-                records.append({
-                    "产品名称": product,
-                    f"成本 ({currency})": cost,
-                    f"卖价 ({currency})": price,
-                    "平台抽成": platform_fee,
-                    "利润 (MYR)": profit_myr,
-                    "利润率 %": margin_pct,
-                    "个人抽成 (MYR)": personal_comm,
-                })
-
-            result_df = pd.DataFrame(records)
-            result_df = result_df.sort_values("利润 (MYR)", ascending=False)
-
-            st.subheader("📈 计算结果")
-            sty = style_results(result_df)
-            st.write(sty, unsafe_allow_html=True)
-
-            # 导出
-            buf = io.BytesIO()
-            with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-                result_df.to_excel(writer, index=False)
-            st.download_button(
-                "下载结果 Excel",
-                buf.getvalue(),
-                file_name="profit_results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        # ============== 利润对比图 ==============
+        st.subheader("📉 产品利润对比图（MYR）")
+        try:
+            import altair as alt
+            chart_data = result_df.groupby(["产品名称"])["利润 (MYR)"].sum().reset_index()
+            chart = (
+                alt.Chart(chart_data)
+                .mark_bar()
+                .encode(
+                    x=alt.X("产品名称:N", sort="-y"),
+                    y=alt.Y("利润 (MYR):Q"),
+                    tooltip=["产品名称", "利润 (MYR)"],
+                )
+                .properties(height=400)
             )
+            st.altair_chart(chart, use_container_width=True)
+        except Exception as e:
+            st.bar_chart(result_df.set_index("产品名称")["利润 (MYR)"])
 
-# ============== 利润对比图 ==============
-if "result_df" in locals() and not result_df.empty:
-    st.subheader("📉 产品利润对比图（MYR）")
-
-    try:
-        import altair as alt
-
-        chart_data = result_df.groupby(["产品名称"])["利润 (MYR)"].sum().reset_index()
-
-        chart = (
-            alt.Chart(chart_data)
-            .mark_bar()
-            .encode(
-                x=alt.X("产品名称:N", sort="-y"),
-                y=alt.Y("利润 (MYR):Q"),
-                tooltip=["产品名称", "利润 (MYR)"],
-            )
-            .properties(height=400)
+        # ============== 颜色说明 ==============
+        st.markdown("### 🎨 颜色说明")
+        st.markdown(
+            """
+            - 🟥 **红色背景** → 利润为负  
+            - 🟩 **绿色背景** → 促销产品  
+            """
         )
-        st.altair_chart(chart, use_container_width=True)
-    except Exception as e:
-        st.warning(f"绘制 Altair 图表失败，使用默认图表: {e}")
-        st.bar_chart(result_df.set_index("产品名称")["利润 (MYR)"])
 
-    # ============== 颜色说明 ==============
-    st.markdown("### 🎨 颜色说明")
-    st.markdown(
-        """
-        - 🟥 **红色背景** → 利润为负  
-        - 🟩 **绿色背景** → 促销产品（利润为正）  
-        """
-    )
+        # 导出 Excel
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+            result_df.to_excel(writer, index=False, sheet_name="Results")
+        st.download_button("⬇️ 下载结果 Excel", data=buffer.getvalue(), file_name=f"profit_results_{country}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
