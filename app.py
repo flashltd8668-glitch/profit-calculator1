@@ -5,8 +5,8 @@ import os
 import io
 from datetime import datetime
 
-st.set_page_config(page_title="Profit Calculator (Auto Promo + File Manager)", layout="wide")
-st.title("💰 自动促销优先的多卖价利润计算器 (支持文件保存 & 国家分类)")
+st.set_page_config(page_title="Profit Calculator (Multi-Country + Auto Promo)", layout="wide")
+st.title("💰 多国家利润计算器 (自动促销优先 + 文件管理 + 汇率支持)")
 
 # 文件存放目录 & metadata
 UPLOAD_DIR = "uploads"
@@ -16,9 +16,18 @@ META_FILE = "file_metadata.csv"
 if not os.path.exists(META_FILE):
     pd.DataFrame(columns=["country", "filename", "filepath", "upload_date"]).to_csv(META_FILE, index=False)
 
+# 国家和对应货币
+COUNTRY_CURRENCY = {
+    "Thailand": "THB",
+    "Malaysia": "MYR",
+    "Vietnam": "VND",
+    "Philippines": "PHP",
+    "Indonesia": "IDR"
+}
+
 # === 国家选择 ===
 st.sidebar.header("国家选择")
-countries = ["Thailand", "Malaysia", "Vietnam", "Philippines", "Indonesia"]
+countries = list(COUNTRY_CURRENCY.keys())
 country = st.sidebar.selectbox("选择国家", countries)
 
 # === 上传文件 ===
@@ -28,22 +37,22 @@ if uploaded_file:
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, uploaded_file.name)
 
-    # 保存文件
+    # 保存文件（覆盖旧文件）
     with open(save_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # 更新 metadata
+    # 更新 metadata（避免重复）
     meta_df = pd.read_csv(META_FILE)
-    meta_df = pd.concat([
-        meta_df,
-        pd.DataFrame([{
-            "country": country,
-            "filename": uploaded_file.name,
-            "filepath": save_path,
-            "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M")
-        }])
-    ], ignore_index=True)
+    meta_df = meta_df[~((meta_df["country"] == country) & (meta_df["filename"] == uploaded_file.name))]
+    new_record = pd.DataFrame([{
+        "country": country,
+        "filename": uploaded_file.name,
+        "filepath": save_path,
+        "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }])
+    meta_df = pd.concat([meta_df, new_record], ignore_index=True)
     meta_df.to_csv(META_FILE, index=False)
+
     st.success(f"✅ 文件已保存到 {save_path}")
 
 # === 历史文件选择 ===
@@ -67,6 +76,14 @@ if not country_files.empty:
         else:
             df = pd.read_csv(file_info["filepath"])
 
+# === 汇率设置（所有国家都能调整） ===
+st.sidebar.header("🌍 汇率设置 (换算成 MYR)")
+exchange_rates = {}
+for c, cur in COUNTRY_CURRENCY.items():
+    default_rate = 7.8 if cur == "THB" else 1.0
+    rate = st.sidebar.number_input(f"1 {cur} = ? MYR", value=default_rate, step=0.01)
+    exchange_rates[cur] = rate
+
 # === 利润计算逻辑 ===
 if df is not None:
     st.subheader("📋 数据预览")
@@ -85,12 +102,11 @@ if df is not None:
     platform_fee_pct = st.sidebar.number_input("平台抽成 (%)", value=5.0)
     personal_commission_pct = st.sidebar.number_input("个人抽成 (%)", value=0.0)
 
-    # === 汇率设置 ===
-    st.sidebar.header("汇率设置")
-    thb_to_myr = st.sidebar.number_input("THB → MYR 汇率", value=7.8)
-
     if name_col and cost_col and price_cols:
         records = []
+        local_currency = COUNTRY_CURRENCY[country]
+        conversion_rate = exchange_rates[local_currency]
+
         for _, row in df.iterrows():
             product = row[name_col]
 
@@ -117,14 +133,15 @@ if df is not None:
                 margin = (profit / price) * 100 if price > 0 else np.nan
                 commission = profit * (personal_commission_pct / 100.0)
 
-                profit_myr = profit / thb_to_myr
-                commission_myr = commission / thb_to_myr
+                # 换算成 MYR
+                profit_myr = profit / conversion_rate
+                commission_myr = commission / conversion_rate
 
                 records.append({
                     "产品名称": product,
-                    "成本 (THB)": base_cost,
-                    "卖价 (THB)": price,
-                    "平台抽成 (THB)": platform_fee,
+                    f"成本 ({local_currency})": base_cost,
+                    f"卖价 ({local_currency})": price,
+                    f"平台抽成 ({local_currency})": platform_fee,
                     "利润 (MYR)": profit_myr,
                     "利润率 %": margin,
                     "个人抽成 (MYR)": commission_myr,
@@ -132,8 +149,6 @@ if df is not None:
                 })
 
         result_df = pd.DataFrame(records)
-
-        # 排序：按利润 (MYR) 从高到低
         result_df = result_df.sort_values(by="利润 (MYR)", ascending=False).reset_index(drop=True)
 
         # ========== 筛选产品（搜索 + 多选） ==========
@@ -168,8 +183,8 @@ if df is not None:
 
             # ========== 图表展示 ==========
             st.subheader("📈 利润对比图 (MYR)")
-            chart_grouped = filtered_df.groupby(["产品名称", "来源", "卖价 (THB)"])["利润 (MYR)"].sum().reset_index()
-            st.bar_chart(chart_grouped.set_index("产品名称").pivot(columns="卖价 (THB)", values="利润 (MYR)"))
+            chart_grouped = filtered_df.groupby(["产品名称", "来源", f"卖价 ({local_currency})"])["利润 (MYR)"].sum().reset_index()
+            st.bar_chart(chart_grouped.set_index("产品名称").pivot(columns=f"卖价 ({local_currency})", values="利润 (MYR)"))
 
             # ========== 导出 Excel ==========
             buffer = io.BytesIO()
