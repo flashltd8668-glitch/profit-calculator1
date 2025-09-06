@@ -55,6 +55,8 @@ if uploaded_file:
 
     st.success(f"✅ 文件已保存到 {save_path}")
 
+import shutil
+
 # === 历史文件选择 ===
 meta_df = pd.read_csv(META_FILE)
 country_files = meta_df[meta_df["country"] == country]
@@ -71,10 +73,38 @@ if not country_files.empty:
         file_info = country_files[country_files["filename"] == file_choice].iloc[0]
         st.info(f"📂 选择文件: {file_info['filename']} (上传日期: {file_info['upload_date']})")
 
+        # ===== 单个文件删除 =====
+        if st.sidebar.button(f"🗑️ 删除 {file_choice}"):
+            try:
+                # 删除物理文件
+                if os.path.exists(file_info["filepath"]):
+                    os.remove(file_info["filepath"])
+                # 删除 metadata 记录
+                meta_df = meta_df.drop(
+                    meta_df[(meta_df["country"] == country) & (meta_df["filename"] == file_choice)].index
+                )
+                meta_df.to_csv(META_FILE, index=False)
+                st.sidebar.success(f"✅ 已删除文件 {file_choice}")
+                st.stop()  # 停止运行，刷新页面
+            except Exception as e:
+                st.sidebar.error(f"❌ 删除失败: {e}")
+
+        # ===== 读取文件 =====
         if file_info["filename"].endswith((".xlsx", ".xls")):
             df = pd.read_excel(file_info["filepath"], header=1)
         else:
             df = pd.read_csv(file_info["filepath"])
+
+# ===== 删除所有文件 =====
+st.sidebar.header("⚙️ 文件管理")
+if st.sidebar.button("🗑️ 删除所有已上传文件"):
+    if os.path.exists(UPLOAD_DIR):
+        shutil.rmtree(UPLOAD_DIR)  # 删除整个 uploads 文件夹
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+    pd.DataFrame(columns=["country", "filename", "filepath", "upload_date"]).to_csv(META_FILE, index=False)
+    st.sidebar.success("✅ 已删除所有上传文件和记录")
+    st.stop()
+
 
 # === 汇率设置（所有国家都能调整） ===
 st.sidebar.header("🌍 汇率设置 (换算成 MYR)")
