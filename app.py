@@ -524,7 +524,16 @@ else:
             # 用 Styler 上色（Streamlit 会渲染 pandas Styler）
             sty = style_results(display_df)
             st.write(sty, unsafe_allow_html=True)
-            st.markdown("**颜色说明：** 🟥 亏损 / 🟩 Promotion / 🟨 高利润")
+            st.markdown(
+    """
+    **颜色说明：**
+    <span style="display:inline-block;width:18px;height:18px;background-color:#ffd6d6;border:1px solid #999;margin-right:6px;"></span> 亏损
+    &nbsp;&nbsp;&nbsp;
+    <span style="display:inline-block;width:18px;height:18px;background-color:#e6ffe6;border:1px solid #999;margin-right:6px;"></span> Promotion
+    """,
+    unsafe_allow_html=True
+)
+
 
             # 可视化利润对比
             st.subheader("📈 产品利润对比（MYR）")
