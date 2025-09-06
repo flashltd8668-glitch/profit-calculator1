@@ -4,6 +4,8 @@ import numpy as np
 import os
 import io
 from datetime import datetime
+import shutil
+import re
 
 st.set_page_config(page_title="Profit Calculator (Multi-Country + Auto Promo)", layout="wide")
 st.title("💰 多国家利润计算器 (自动促销优先 + 文件管理 + 汇率支持)")
@@ -55,8 +57,6 @@ if uploaded_file:
 
     st.success(f"✅ 文件已保存到 {save_path}")
 
-import shutil
-
 # === 历史文件选择 ===
 meta_df = pd.read_csv(META_FILE)
 country_files = meta_df[meta_df["country"] == country]
@@ -76,37 +76,42 @@ if not country_files.empty:
         # ===== 单个文件删除 =====
         if st.sidebar.button(f"🗑️ 删除 {file_choice}"):
             try:
-                # 删除物理文件
                 if os.path.exists(file_info["filepath"]):
                     os.remove(file_info["filepath"])
-                # 删除 metadata 记录
                 meta_df = meta_df.drop(
                     meta_df[(meta_df["country"] == country) & (meta_df["filename"] == file_choice)].index
                 )
                 meta_df.to_csv(META_FILE, index=False)
                 st.sidebar.success(f"✅ 已删除文件 {file_choice}")
-                st.stop()  # 停止运行，刷新页面
+                st.stop()
             except Exception as e:
                 st.sidebar.error(f"❌ 删除失败: {e}")
 
+        # ===== 表头行选择 =====
+        st.sidebar.header("📑 表头设置")
+        header_row = st.sidebar.number_input("表头所在行（从1开始）", min_value=1, max_value=20, value=2, step=1)
+
         # ===== 读取文件 =====
         if file_info["filename"].endswith((".xlsx", ".xls")):
-            df = pd.read_excel(file_info["filepath"], header=1)
+            df = pd.read_excel(file_info["filepath"], header=header_row-1)
         else:
-            df = pd.read_csv(file_info["filepath"])
+            df = pd.read_csv(file_info["filepath"], header=header_row-1)
+
+        # ===== 自动修复 Unnamed 列名 =====
+        df.columns = [c if not str(c).startswith("Unnamed") else None for c in df.columns]
+        df.columns = pd.Series(df.columns).fillna(method="ffill")
 
 # ===== 删除所有文件 =====
 st.sidebar.header("⚙️ 文件管理")
 if st.sidebar.button("🗑️ 删除所有已上传文件"):
     if os.path.exists(UPLOAD_DIR):
-        shutil.rmtree(UPLOAD_DIR)  # 删除整个 uploads 文件夹
+        shutil.rmtree(UPLOAD_DIR)
         os.makedirs(UPLOAD_DIR, exist_ok=True)
     pd.DataFrame(columns=["country", "filename", "filepath", "upload_date"]).to_csv(META_FILE, index=False)
     st.sidebar.success("✅ 已删除所有上传文件和记录")
     st.stop()
 
-
-# === 汇率设置（所有国家都能调整） ===
+# === 汇率设置 ===
 st.sidebar.header("🌍 汇率设置 (换算成 MYR)")
 exchange_rates = {}
 for c, cur in COUNTRY_CURRENCY.items():
@@ -121,7 +126,7 @@ if df is not None:
 
     # === 映射字段 ===
     st.sidebar.header("映射字段")
-    name_col = st.sidebar.selectbox("选择产品名称列", [None] + list(df.columns))
+    name_col = st.sidebar.selectbox("选择产品名称列", list(df.columns))
     cost_col = st.sidebar.selectbox("选择普通成本列", [None] + list(df.columns))
     promo_cost_col = st.sidebar.selectbox("选择促销成本列 (可选)", [None] + list(df.columns))
     promo_price_col = st.sidebar.selectbox("选择促销售价列 (可选)", [None] + list(df.columns))
@@ -138,7 +143,7 @@ if df is not None:
         conversion_rate = exchange_rates[local_currency]
 
         for _, row in df.iterrows():
-            product = row[name_col]
+            product = str(row[name_col])
 
             # 优先使用促销成本+促销售价
             if promo_cost_col and promo_price_col and pd.notna(row[promo_cost_col]) and pd.notna(row[promo_price_col]):
@@ -183,7 +188,6 @@ if df is not None:
 
         # ========== 筛选产品（搜索 + 多选） ==========
         st.sidebar.header("产品筛选")
-
         all_products = sorted(result_df["产品名称"].dropna().unique().tolist())
         search_term = st.sidebar.text_input("🔍 搜索产品（支持模糊匹配）")
 
@@ -202,7 +206,6 @@ if df is not None:
 
         # ========== 表格展示 ==========
         st.subheader("📊 计算结果（已按利润高低排序）")
-
         if filtered_df.empty:
             st.warning("⚠️ 没有符合条件的产品数据")
         else:
