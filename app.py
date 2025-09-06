@@ -539,7 +539,7 @@ else:
                 st.warning("⚠️ 没有符合条件的产品数据")
             else:
                 sty = style_results(filtered_df, profit_threshold)
-                st.write(sty, unsafe_allow_html=True)
+                st.dataframe(sty)
 
                 # 利润对比图
                 st.subheader("📈 产品利润对比（MYR）")
