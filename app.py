@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 import os
 import io
-import shutil
 from datetime import datetime
+import shutil
 
 st.set_page_config(page_title="Profit Calculator (Multi-Country + Auto Promo)", layout="wide")
 st.title("💰 多国家利润计算器 (自动促销优先 + 文件管理 + 汇率支持)")
@@ -87,25 +87,10 @@ if not country_files.empty:
                 st.sidebar.error(f"❌ 删除失败: {e}")
 
         # ===== 读取文件 =====
-        header_row = st.sidebar.number_input("表头所在行（从1开始）", min_value=1, max_value=20, value=2, step=1)
-        try:
-            if file_info["filename"].endswith((".xlsx", ".xls")):
-                df = pd.read_excel(file_info["filepath"], header=header_row-1)
-            else:
-                df = pd.read_csv(file_info["filepath"], header=header_row-1)
-
-            # 修复合并单元格导致的 Unnamed
-            clean_cols = []
-            for i, c in enumerate(df.columns):
-                if c is None or str(c).strip() == "" or str(c).startswith("Unnamed"):
-                    clean_cols.append(f"Column_{i}")
-                else:
-                    clean_cols.append(str(c))
-            df.columns = clean_cols
-
-        except Exception as e:
-            st.error(f"❌ 文件读取失败: {e}")
-            df = None
+        if file_info["filename"].endswith((".xlsx", ".xls")):
+            df = pd.read_excel(file_info["filepath"], header=1)
+        else:
+            df = pd.read_csv(file_info["filepath"])
 
 # ===== 删除所有文件 =====
 st.sidebar.header("⚙️ 文件管理")
@@ -117,7 +102,7 @@ if st.sidebar.button("🗑️ 删除所有已上传文件"):
     st.sidebar.success("✅ 已删除所有上传文件和记录")
     st.stop()
 
-# === 汇率设置 ===
+# === 汇率设置（所有国家都能调整） ===
 st.sidebar.header("🌍 汇率设置 (换算成 MYR)")
 exchange_rates = {}
 for c, cur in COUNTRY_CURRENCY.items():
@@ -126,7 +111,7 @@ for c, cur in COUNTRY_CURRENCY.items():
     exchange_rates[cur] = rate
 
 # === 利润计算逻辑 ===
-if df is not None and not df.empty:
+if df is not None:
     st.subheader("📋 数据预览")
     st.dataframe(df.head())
 
@@ -149,20 +134,17 @@ if df is not None and not df.empty:
         conversion_rate = exchange_rates[local_currency]
 
         for _, row in df.iterrows():
-            product = row[name_col]
+            product = str(row[name_col]) if pd.notna(row[name_col]) else "未命名产品"
 
             if promo_cost_col and promo_price_col and pd.notna(row[promo_cost_col]) and pd.notna(row[promo_price_col]):
-                base_cost = pd.to_numeric(row[promo_cost_col], errors="coerce")
-                base_cost = 0 if pd.isna(base_cost) else base_cost
+                base_cost = pd.to_numeric(row[promo_cost_col], errors="coerce") or 0
                 prices = str(row[promo_price_col]).split("/")
                 source = "Promotion"
             else:
-                base_cost = pd.to_numeric(row[cost_col], errors="coerce")
-                base_cost = 0 if pd.isna(base_cost) else base_cost
+                base_cost = pd.to_numeric(row[cost_col], errors="coerce") or 0
                 prices = []
                 for col in price_cols:
-                    if pd.notna(row[col]):
-                        prices.extend(str(row[col]).split("/"))
+                    prices.extend(str(row[col]).split("/"))
                 source = "Normal"
 
             for raw_p in prices:
@@ -193,27 +175,25 @@ if df is not None and not df.empty:
         result_df = pd.DataFrame(records)
         result_df = result_df.sort_values(by="利润 (MYR)", ascending=False).reset_index(drop=True)
 
-       # ========== 筛选产品 ==========
-st.sidebar.header("产品筛选")
+        # ========== 筛选产品（搜索 + 多选） ==========
+        st.sidebar.header("产品筛选")
 
-# 统一转成字符串，避免 int + str 混合排序时报错
-all_products = sorted(result_df["产品名称"].dropna().astype(str).unique().tolist())
+        result_df["产品名称"] = result_df["产品名称"].astype(str)
+        all_products = sorted(result_df["产品名称"].unique().tolist())
 
-search_term = st.sidebar.text_input("🔍 搜索产品（支持模糊匹配）")
+        search_term = st.sidebar.text_input("🔍 搜索产品（支持模糊匹配）")
+        if search_term:
+            filtered_products = [p for p in all_products if search_term.lower() in p.lower()]
+        else:
+            filtered_products = all_products
 
-if search_term:
-    filtered_products = [p for p in all_products if search_term.lower() in str(p).lower()]
-else:
-    filtered_products = all_products
+        selected_products = st.sidebar.multiselect(
+            "选择要显示的产品",
+            filtered_products,
+            default=filtered_products
+        )
 
-selected_products = st.sidebar.multiselect(
-    "选择要显示的产品",
-    filtered_products,
-    default=filtered_products
-)
-
-filtered_df = result_df[result_df["产品名称"].astype(str).isin(selected_products)]
-
+        filtered_df = result_df[result_df["产品名称"].isin(selected_products)]
 
         # ========== 表格展示 ==========
         st.subheader("📊 计算结果（已按利润高低排序）")
@@ -227,17 +207,19 @@ filtered_df = result_df[result_df["产品名称"].astype(str).isin(selected_prod
 
             # ========== 图表展示 ==========
             st.subheader("📈 利润对比图 (MYR)")
-            if not filtered_df.empty:
-                chart_grouped = filtered_df.groupby(["产品名称", "来源", f"卖价 ({local_currency})"])["利润 (MYR)"].sum().reset_index()
-                st.bar_chart(chart_grouped.set_index("产品名称").pivot(columns=f"卖价 ({local_currency})", values="利润 (MYR)"))
+            chart_grouped = filtered_df.groupby(
+                ["产品名称", "来源", f"卖价 ({local_currency})"]
+            )["利润 (MYR)"].sum().reset_index()
+            st.bar_chart(
+                chart_grouped.set_index("产品名称").pivot(columns=f"卖价 ({local_currency})", values="利润 (MYR)")
+            )
 
             # ========== 导出 Excel ==========
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
                 result_df.to_excel(writer, index=False, sheet_name="All_Results")
                 filtered_df.to_excel(writer, index=False, sheet_name="Filtered_Results")
-                if not filtered_df.empty:
-                    chart_grouped.to_excel(writer, index=False, sheet_name="ChartData")
+                chart_grouped.to_excel(writer, index=False, sheet_name="ChartData")
 
             st.download_button(
                 label="⬇️ 下载结果 Excel",
